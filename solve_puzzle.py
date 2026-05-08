@@ -11,14 +11,12 @@ class DuducoPuzzleSolver:
         self.regions = self._find_regions()
         self.solutions = []
         self.current_placement = {}
-        self.duducos = {}  # 嘟嘟可位置
-        self.no_duduco_rows = set()  # 没有嘟嘟可的行
-        self.no_duduco_cols = set()  # 没有嘟嘟可的列
-        self.no_duduco_positions = set()  # 没有嘟嘟可的位置（周围8格）
-        self.detected_colors = set()  # 已检测过的颜色
+        self.duducos = {}
+        self.no_duduco_rows = set()
+        self.no_duduco_cols = set()
+        self.no_duduco_positions = set()
     
     def _is_valid_position(self, r: int, c: int) -> bool:
-        """检查位置(r, c)是否可以放置嘟嘟可"""
         return (r not in self.no_duduco_rows and 
                 c not in self.no_duduco_cols and 
                 (r, c) not in self.no_duduco_positions)
@@ -79,22 +77,6 @@ class DuducoPuzzleSolver:
                 nr, nc = r + dr, c + dc
                 if 0 <= nr < self.size and 0 <= nc < self.size:
                     self.no_duduco_positions.add((nr, nc))
-
-    def _detect_single_cell(self) -> bool:
-        """检测只有一个格子的颜色区域，这些位置一定是嘟嘟可"""
-        for color, regions_list in self.regions.items():
-            if color in self.duducos or color in self.current_placement:
-                continue
-                
-            region = regions_list[0]
-            if len(region) == 1:
-                pos = region[0]
-                r, c = pos
-                # 检查是否有效（未被标记为"没有嘟嘟可"）
-                if self._is_valid_position(r, c):
-                    self._mark_placement(color, pos)
-                    return True
-        return False
 
     def _detect_last_cell(self) -> bool:
         """检测某一行或某一列是否只剩一个位置未被标记为"没有嘟嘟可"，若是则标记为嘟嘟可"""
@@ -243,199 +225,53 @@ class DuducoPuzzleSolver:
         
         return updated
 
-    def _detect_two_cell_patterns(self) -> bool:
-        """检测颜色区域中只剩2个未标记格子的情况，根据形状标记相应位置"""
+    def _detect_surrounded_exclusion(self) -> bool:
         updated = False
-        
-        for color, regions_list in self.regions.items():
-            if color in self.duducos or color in self.current_placement:
-                continue
-            
-            # 每种颜色在单次大循环中只检查一次
-            if color in self.detected_colors:
-                continue
-            
-            region = regions_list[0]
-            
-            # 获取未被标记为"没有嘟嘟可"的格子
-            unmarked = []
-            for pos in region:
-                r, c = pos
-                if self._is_valid_position(r, c):
-                    unmarked.append(pos)
-            
-            # 如果只剩2个未标记的格子
-            if len(unmarked) == 2:
-                print(f"发现颜色{color}只剩2个未标记格子：{unmarked}")
-                
-                (r1, c1), (r2, c2) = unmarked
-                
-                # 情况1：横向（同一行）
-                if r1 == r2:
-                    row = r1
-                    col1, col2 = sorted([c1, c2])
-                    print(f"  - 横向，标记两个格子的上下位置")
-                    # 标记两个格子的上方为"没有嘟嘟可"
-                    if row > 0:
-                        self.no_duduco_positions.add((row - 1, col1))
-                        self.no_duduco_positions.add((row - 1, col2))
-                    # 标记两个格子的下方为"没有嘟嘟可"
-                    if row < self.size - 1:
-                        self.no_duduco_positions.add((row + 1, col1))
-                        self.no_duduco_positions.add((row + 1, col2))
-                    updated = True
-                
-                # 情况2：竖向（同一列）
-                elif c1 == c2:
-                    col = c1
-                    row1, row2 = sorted([r1, r2])
-                    print(f"  - 竖向，标记两个格子的左右位置")
-                    # 标记两个格子的左边为"没有嘟嘟可"
-                    if col > 0:
-                        self.no_duduco_positions.add((row1, col - 1))
-                        self.no_duduco_positions.add((row2, col - 1))
-                    # 标记两个格子的右边为"没有嘟嘟可"
-                    if col < self.size - 1:
-                        self.no_duduco_positions.add((row1, col + 1))
-                        self.no_duduco_positions.add((row2, col + 1))
-                    updated = True
-            
-            # 标记该颜色已检测
-            self.detected_colors.add(color)
-        
-        return updated
+        for r in range(self.size):
+            for c in range(self.size):
+                if not self._is_valid_position(r, c):
+                    continue
+                neighbors = set()
+                for dr in [-1, 0, 1]:
+                    for dc in [-1, 0, 1]:
+                        if dr == 0 and dc == 0:
+                            continue
+                        nr, nc = r + dr, c + dc
+                        if 0 <= nr < self.size and 0 <= nc < self.size:
+                            neighbors.add((nr, nc))
 
-    def _detect_three_cell_patterns(self) -> bool:
-        """检测颜色区域中只剩3个未标记格子的情况，根据形状标记相应位置"""
-        updated = False
-        
-        for color, regions_list in self.regions.items():
-            if color in self.duducos or color in self.current_placement:
-                continue
-            
-            # 每种颜色在单次大循环中只检查一次
-            if color in self.detected_colors:
-                continue
-            
-            region = regions_list[0]
-            
-            # 获取未被标记为"没有嘟嘟可"的格子
-            unmarked = []
-            for pos in region:
-                r, c = pos
-                if self._is_valid_position(r, c):
-                    unmarked.append(pos)
-            
-            # 如果只剩3个未标记的格子
-            if len(unmarked) == 3:
-                print(f"发现颜色{color}只剩3个未标记格子：{unmarked}")
-                
-                rows = [pos[0] for pos in unmarked]
-                cols = [pos[1] for pos in unmarked]
-                
-                # 情况1：横线（所有在同一行，列连续）
-                if len(set(rows)) == 1:
-                    row = rows[0]
-                    sorted_cols = sorted(cols)
-                    if sorted_cols[2] - sorted_cols[0] == 2:
-                        mid_col = sorted_cols[1]
-                        # 标记中间格子的上下格子为"没有嘟嘟可"
-                        if row > 0 and (row - 1, mid_col) not in self.no_duduco_positions:
-                            self.no_duduco_positions.add((row - 1, mid_col))
-                        if row < self.size - 1 and (row + 1, mid_col) not in self.no_duduco_positions:
-                            self.no_duduco_positions.add((row + 1, mid_col))
-                        print(f"  - 横线形状，标记中间格子({row},{mid_col})的上下位置")
+                for color, regions_list in self.regions.items():
+                    if color in self.duducos or color in self.current_placement:
+                        continue
+                    region = regions_list[0]
+                    unmarked = [p for p in region if self._is_valid_position(p[0], p[1])]
+                    if not unmarked:
+                        continue
+                    if all(p in neighbors for p in unmarked):
+                        print(f"包围排除: ({r},{c})的8邻域覆盖颜色{color}全部{len(unmarked)}个候选格")
+                        self.no_duduco_positions.add((r, c))
                         updated = True
-                
-                # 情况2：竖线（所有在同一列，行连续）
-                elif len(set(cols)) == 1:
-                    col = cols[0]
-                    sorted_rows = sorted(rows)
-                    if sorted_rows[2] - sorted_rows[0] == 2:
-                        mid_row = sorted_rows[1]
-                        # 标记中间格子的左右格子为"没有嘟嘟可"
-                        if col > 0 and (mid_row, col - 1) not in self.no_duduco_positions:
-                            self.no_duduco_positions.add((mid_row, col - 1))
-                        if col < self.size - 1 and (mid_row, col + 1) not in self.no_duduco_positions:
-                            self.no_duduco_positions.add((mid_row, col + 1))
-                        print(f"  - 竖线形状，标记中间格子({mid_row},{col})的左右位置")
-                        updated = True
-                
-                # 情况3：L型
-                else:
-                    for pos in unmarked:
-                        r, c = pos
-                        has_above = (r - 1, c) in unmarked
-                        has_below = (r + 1, c) in unmarked
-                        has_left = (r, c - 1) in unmarked
-                        has_right = (r, c + 1) in unmarked
-                        
-                        if (has_above + has_below + has_left + has_right) == 2:
-                            if has_above and has_left and not has_below and not has_right:
-                                if r + 1 < self.size and c + 1 < self.size and (r + 1, c + 1) not in self.no_duduco_positions:
-                                    self.no_duduco_positions.add((r + 1, c + 1))
-                                    print(f"  - L型，标记被包围的格子({r + 1},{c + 1})")
-                                    updated = True
-                            elif has_above and has_right and not has_below and not has_left:
-                                if r + 1 < self.size and c - 1 >= 0 and (r + 1, c - 1) not in self.no_duduco_positions:
-                                    self.no_duduco_positions.add((r + 1, c - 1))
-                                    print(f"  - L型，标记被包围的格子({r + 1},{c - 1})")
-                                    updated = True
-                            elif has_below and has_left and not has_above and not has_right:
-                                if r - 1 >= 0 and c + 1 < self.size and (r - 1, c + 1) not in self.no_duduco_positions:
-                                    self.no_duduco_positions.add((r - 1, c + 1))
-                                    print(f"  - L型，标记被包围的格子({r - 1},{c + 1})")
-                                    updated = True
-                            elif has_below and has_right and not has_above and not has_left:
-                                if r - 1 >= 0 and c - 1 >= 0 and (r - 1, c - 1) not in self.no_duduco_positions:
-                                    self.no_duduco_positions.add((r - 1, c - 1))
-                                    print(f"  - L型，标记被包围的格子({r - 1},{c - 1})")
-                                    updated = True
-                            break
-            
-            # 标记该颜色已检测
-            self.detected_colors.add(color)
-        
+                        break
         return updated
 
     def _detection_loop(self):
-        """大循环：依次执行所有检测方法，直到没有新发现"""
         print("\n=== 开始检测循环 ===")
         
         max_iterations = 100
-        iteration = 0
         
-        while iteration < max_iterations:
-            iteration += 1
+        for iteration in range(1, max_iterations + 1):
             changed = False
             
-            # 重置已检测颜色集合（用于2格和3格模式检测）
-            self.detected_colors.clear()
-            
-            # 检测方法1-N：n种颜色共享n行/列检测（n从1到网格大小）
+            if self._detect_last_cell():
+                changed = True
             for n in range(1, self.size + 1):
                 if self._detect_n_color_shared_rows(n):
                     changed = True
-            
-            # 检测方法10：3格模式
-            if self._detect_three_cell_patterns():
-                changed = True
-            
-            # 检测方法11：2格模式
-            if self._detect_two_cell_patterns():
-                changed = True
-            
-            # 检测方法12：行列最后一格检测
-            if self._detect_last_cell():
-                changed = True
-            
-            # 检测方法13：单格颜色区域
-            if self._detect_single_cell():
+            if self._detect_surrounded_exclusion():
                 changed = True
             
             print(f"  第{iteration}轮完成，changed={changed}")
             
-            # 如果没有任何变化，退出循环
             if not changed:
                 break
         
@@ -443,20 +279,6 @@ class DuducoPuzzleSolver:
             print(f"!!! 达到最大迭代次数 {max_iterations}，强制退出")
         
         print("=== 检测循环结束 ===\n")
-
-    def _is_valid_placement(self, color: int, pos: Tuple[int, int]) -> bool:
-        r, c = pos
-
-        if r in self.no_duduco_rows:
-            return False
-        
-        if c in self.no_duduco_cols:
-            return False
-        
-        if pos in self.no_duduco_positions:
-            return False
-        
-        return True
 
     def _solve_region(self, placed_count: int) -> bool:
         if placed_count >= len(self.regions):
@@ -469,17 +291,7 @@ class DuducoPuzzleSolver:
                 continue
                 
             region = self.regions[color][0]
-            
-            valid_positions = []
-            for pos in region:
-                r, c = pos
-                if r in self.no_duduco_rows:
-                    continue
-                if c in self.no_duduco_cols:
-                    continue
-                if pos in self.no_duduco_positions:
-                    continue
-                valid_positions.append(pos)
+            valid_positions = [pos for pos in region if self._is_valid_position(pos[0], pos[1])]
             
             if not valid_positions:
                 return False
@@ -488,7 +300,6 @@ class DuducoPuzzleSolver:
                 self.current_placement[color] = pos
                 r, c = pos
                 
-                # 临时标记为"没有嘟嘟可"
                 old_no_duduco_rows = self.no_duduco_rows.copy()
                 old_no_duduco_cols = self.no_duduco_cols.copy()
                 old_no_duduco_positions = self.no_duduco_positions.copy()
@@ -506,28 +317,133 @@ class DuducoPuzzleSolver:
                 if self._solve_region(placed_count + 1):
                     return True
                 
-                # 恢复标记
                 self.no_duduco_rows = old_no_duduco_rows
                 self.no_duduco_cols = old_no_duduco_cols
                 self.no_duduco_positions = old_no_duduco_positions
                 del self.current_placement[color]
-        
         return False
 
+    def _mini_backtrack_two_colors(self) -> bool:
+        color_candidates = {}
+        for color in self.regions:
+            if color in self.duducos or color in self.current_placement:
+                continue
+            region = self.regions[color][0]
+            valid = [pos for pos in region if self._is_valid_position(pos[0], pos[1])]
+            if valid:
+                color_candidates[color] = valid
+
+        if len(color_candidates) < 2:
+            return False
+
+        sorted_colors = sorted(color_candidates.items(), key=lambda x: len(x[1]))
+        (color1, positions1), (color2, positions2) = sorted_colors[0], sorted_colors[1]
+
+        valid_combinations = []
+        for pos1 in positions1:
+            for pos2 in positions2:
+                if pos1 == pos2:
+                    continue
+                r1, c1 = pos1
+                r2, c2 = pos2
+                if r1 == r2 or c1 == c2:
+                    continue
+                if abs(r1 - r2) <= 1 and abs(c1 - c2) <= 1:
+                    continue
+                valid_combinations.append((pos1, pos2))
+
+        if not valid_combinations:
+            return False
+
+        branch_new_duducos = {}
+        branch_new_no_pos = []
+
+        for pos1, pos2 in valid_combinations:
+            old_duducos = self.duducos.copy()
+            old_no_rows = self.no_duduco_rows.copy()
+            old_no_cols = self.no_duduco_cols.copy()
+            old_no_pos = self.no_duduco_positions.copy()
+
+            self.duducos[color1] = pos1
+            self.duducos[color2] = pos2
+            r1, c1 = pos1
+            r2, c2 = pos2
+            self.no_duduco_rows.add(r1)
+            self.no_duduco_rows.add(r2)
+            self.no_duduco_cols.add(c1)
+            self.no_duduco_cols.add(c2)
+            for dr in [-1, 0, 1]:
+                for dc in [-1, 0, 1]:
+                    if dr == 0 and dc == 0:
+                        continue
+                    nr1, nc1 = r1 + dr, c1 + dc
+                    nr2, nc2 = r2 + dr, c2 + dc
+                    if 0 <= nr1 < self.size and 0 <= nc1 < self.size:
+                        self.no_duduco_positions.add((nr1, nc1))
+                    if 0 <= nr2 < self.size and 0 <= nc2 < self.size:
+                        self.no_duduco_positions.add((nr2, nc2))
+
+            self._detection_loop()
+
+            new_duducos = {c: p for c, p in self.duducos.items()
+                           if c not in old_duducos and c != color1 and c != color2}
+            branch_new_duducos[(pos1, pos2)] = new_duducos
+            branch_new_no_pos.append(self.no_duduco_positions - old_no_pos)
+
+            self.duducos = old_duducos
+            self.no_duduco_rows = old_no_rows
+            self.no_duduco_cols = old_no_cols
+            self.no_duduco_positions = old_no_pos
+
+        if not branch_new_duducos:
+            return False
+
+        found = False
+
+        branch_sets = [set(d.keys()) for d in branch_new_duducos.values()]
+        common_colors = branch_sets[0]
+        for s in branch_sets[1:]:
+            common_colors &= s
+
+        if common_colors:
+            for color in common_colors:
+                if color in self.duducos:
+                    continue
+                positions = [branch[color] for branch in branch_new_duducos.values()]
+                if len(set(positions)) == 1:
+                    self._mark_placement(color, positions[0])
+                    found = True
+
+        if branch_new_no_pos:
+            common_no = branch_new_no_pos[0].copy()
+            for s in branch_new_no_pos[1:]:
+                common_no &= s
+            for pos in common_no:
+                if pos not in self.no_duduco_positions:
+                    self.no_duduco_positions.add(pos)
+                    found = True
+
+        return found
+
     def solve(self):
-        # 执行检测大循环
+        print("开始检测循环...")
         self._detection_loop()
         
         print(f"已发现 {len(self.duducos)} 个嘟嘟可")
         
-        # 打印检测结果
         self.print_detection_result()
-        
-        # 保存检测结果到文件
         self.save_detection_result()
         
-        # 开始回溯求解
+        print("开始小型回溯...")
+        while self._mini_backtrack_two_colors():
+            print("mini回溯有新发现，重跑规则循环...")
+            self._detection_loop()
+            print(f"现在确定: {len(self.duducos)}个嘟嘟可")
+            self.print_detection_result()
+        
+        print(f"进入主回溯，已确定{len(self.duducos)}个，共{len(self.regions)}色")
         self._solve_region(len(self.duducos))
+        print(f"主回溯结束，找到{len(self.solutions)}个解")
         return self.solutions
 
     def print_solution(self, solution: Dict[int, Tuple[int, int]]):
@@ -537,9 +453,13 @@ class DuducoPuzzleSolver:
             result_grid[r][c] = f'*{color}*'
 
         print("\n解法结果（*表示嘟嘟可位置，数字为颜色）：")
-        print("  " + " ".join(str(i) for i in range(self.size)))
+        print("    " + " ".join(f"{i+1:2d}" for i in range(self.size)))
         for i, row in enumerate(result_grid):
-            print(f"{i} " + " ".join(row))
+            print(f"{i+1:2d}  " + " ".join(row))
+        print()
+        print("嘟嘟可位置详情：")
+        for color, (r, c) in sorted(solution.items(), key=lambda x: x[1][0]):
+            print(f"  颜色{color}: ({r+1}, {c+1})")
         print()
 
     def print_detection_result(self):
@@ -576,8 +496,8 @@ class DuducoPuzzleSolver:
             # 打印嘟嘟可详情
             if self.duducos:
                 f.write("嘟嘟可位置详情:\n")
-                for color, pos in sorted(self.duducos.items()):
-                    f.write(f"  颜色{color}: ({pos[0]}, {pos[1]})\n")
+                for color, pos in sorted(self.duducos.items(), key=lambda x: x[1][0]):
+                    f.write(f"  颜色{color}: ({pos[0]+1}, {pos[1]+1})\n")
                 f.write("\n")
             
             # 打印网格

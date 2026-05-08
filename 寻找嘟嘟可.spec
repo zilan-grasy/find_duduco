@@ -2,7 +2,7 @@
 
 
 a = Analysis(
-    ['D:\\Trae CN\\projects\\001\\find_duduco.py'],
+    ['find_duduco.py'],
     pathex=[],
     binaries=[],
     datas=[],

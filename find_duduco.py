@@ -144,20 +144,51 @@ class GridImageRecognizer:
         normalized[:, 1] = color_array[:, 1] / 255.0
         normalized[:, 2] = color_array[:, 2] / 255.0
         
-        best_labels, best_score = None, float('inf')
-        for _ in range(10):
-            try:
-                criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 300, 0.0001)
-                compactness, labels, centers = cv2.kmeans(
-                    normalized.reshape((-1, 3)), target_colors, None, criteria, 30, cv2.KMEANS_PP_CENTERS)
-                if compactness < best_score:
-                    best_score, best_labels = compactness, labels.flatten()
-            except:
-                continue
-        
-        if best_labels is None:
+        criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 300, 0.0001)
+        try:
+            compactness, labels, centers = cv2.kmeans(
+                normalized.reshape((-1, 3)), target_colors, None, criteria, 30, cv2.KMEANS_PP_CENTERS)
+            best_labels, best_centers = labels.flatten(), centers
+        except:
             return [[1 if c else 0 for c in row] for row in color_list]
+
+        merge_map = {}
+        n_clusters = len(best_centers)
+        for i in range(n_clusters):
+            merge_map[i] = i
+        for i in range(n_clusters):
+            for j in range(i + 1, n_clusters):
+                dist = np.linalg.norm(best_centers[i] - best_centers[j])
+                if dist < 0.08:
+                    root_i = i
+                    while merge_map[root_i] != root_i:
+                        root_i = merge_map[root_i]
+                    root_j = j
+                    while merge_map[root_j] != root_j:
+                        root_j = merge_map[root_j]
+                    if root_i != root_j:
+                        merge_map[max(root_i, root_j)] = min(root_i, root_j)
         
+        remap = {}
+        new_id = 0
+        for i in range(n_clusters):
+            root = i
+            while merge_map[root] != root:
+                root = merge_map[root]
+            if root not in remap:
+                remap[root] = new_id
+                new_id += 1
+            remap[i] = remap[root]
+
+        merged_centers = {}
+        for i in range(n_clusters):
+            mroot = remap[i]
+            if mroot not in merged_centers:
+                merged_centers[mroot] = []
+            merged_centers[mroot].append(best_centers[i])
+        for mroot in merged_centers:
+            merged_centers[mroot] = np.mean(merged_centers[mroot], axis=0)
+
         label_idx, result = 0, []
         for row in color_list:
             row_result = []
@@ -165,7 +196,9 @@ class GridImageRecognizer:
                 if color is None:
                     row_result.append(0)
                 else:
-                    row_result.append(best_labels[label_idx] + 1)
+                    raw_hash = (color[0] / 180.0, color[1] / 255.0, color[2] / 255.0)
+                    best_cluster = min(merged_centers.items(), key=lambda x: np.linalg.norm(raw_hash - x[1]))
+                    row_result.append(best_cluster[0] + 1)
                     label_idx += 1
             result.append(row_result)
         return result
@@ -182,7 +215,7 @@ class GridImageRecognizer:
                     return None
         hsv = cv2.cvtColor(cell, cv2.COLOR_BGR2HSV)
         avg_h, avg_s, avg_v = np.mean(hsv[:, :, 0]), np.mean(hsv[:, :, 1]), np.mean(hsv[:, :, 2])
-        if avg_s < 10 or avg_v > 250:
+        if avg_s < 10 or (avg_v > 245 and avg_s < 25):
             return None
         return (avg_h, avg_s, avg_v)
 
@@ -200,7 +233,6 @@ class DuducoPuzzleSolver:
         self.no_duduco_rows = set()
         self.no_duduco_cols = set()
         self.no_duduco_positions = set()
-        self.detected_colors = set()
     
     def _is_valid_position(self, r: int, c: int) -> bool:
         return (r not in self.no_duduco_rows and 
@@ -243,18 +275,6 @@ class DuducoPuzzleSolver:
                 nr, nc = r + dr, c + dc
                 if 0 <= nr < self.size and 0 <= nc < self.size:
                     self.no_duduco_positions.add((nr, nc))
-
-    def _detect_single_cell(self) -> bool:
-        for color, regions_list in self.regions.items():
-            if color in self.duducos or color in self.current_placement:
-                continue
-            region = regions_list[0]
-            if len(region) == 1:
-                r, c = region[0]
-                if self._is_valid_position(r, c):
-                    self._mark_placement(color, region[0])
-                    return True
-        return False
 
     def _detect_last_cell(self) -> bool:
         for r in range(self.size):
@@ -333,107 +353,45 @@ class DuducoPuzzleSolver:
                                 updated = True
         return updated
 
-    def _detect_two_cell_patterns(self) -> bool:
+    def _detect_surrounded_exclusion(self) -> bool:
         updated = False
-        for color, regions_list in self.regions.items():
-            if color in self.duducos or color in self.current_placement or color in self.detected_colors:
-                continue
-            
-            region = regions_list[0]
-            unmarked = [pos for pos in region if self._is_valid_position(pos[0], pos[1])]
-            
-            if len(unmarked) == 2:
-                (r1, c1), (r2, c2) = unmarked
-                if r1 == r2:
-                    row, col1, col2 = r1, sorted([c1, c2])[0], sorted([c1, c2])[1]
-                    if row > 0:
-                        self.no_duduco_positions.add((row - 1, col1))
-                        self.no_duduco_positions.add((row - 1, col2))
-                    if row < self.size - 1:
-                        self.no_duduco_positions.add((row + 1, col1))
-                        self.no_duduco_positions.add((row + 1, col2))
-                    updated = True
-                elif c1 == c2:
-                    col, row1, row2 = c1, sorted([r1, r2])[0], sorted([r1, r2])[1]
-                    if col > 0:
-                        self.no_duduco_positions.add((row1, col - 1))
-                        self.no_duduco_positions.add((row2, col - 1))
-                    if col < self.size - 1:
-                        self.no_duduco_positions.add((row1, col + 1))
-                        self.no_duduco_positions.add((row2, col + 1))
-                    updated = True
-            self.detected_colors.add(color)
-        return updated
+        for r in range(self.size):
+            for c in range(self.size):
+                if not self._is_valid_position(r, c):
+                    continue
+                neighbors = set()
+                for dr in [-1, 0, 1]:
+                    for dc in [-1, 0, 1]:
+                        if dr == 0 and dc == 0:
+                            continue
+                        nr, nc = r + dr, c + dc
+                        if 0 <= nr < self.size and 0 <= nc < self.size:
+                            neighbors.add((nr, nc))
 
-    def _detect_three_cell_patterns(self) -> bool:
-        updated = False
-        for color, regions_list in self.regions.items():
-            if color in self.duducos or color in self.current_placement or color in self.detected_colors:
-                continue
-            
-            region = regions_list[0]
-            unmarked = [pos for pos in region if self._is_valid_position(pos[0], pos[1])]
-            
-            if len(unmarked) == 3:
-                rows, cols = [p[0] for p in unmarked], [p[1] for p in unmarked]
-                
-                if len(set(rows)) == 1:
-                    row, sorted_cols = rows[0], sorted(cols)
-                    if sorted_cols[2] - sorted_cols[0] == 2:
-                        mid_col = sorted_cols[1]
-                        if row > 0 and (row - 1, mid_col) not in self.no_duduco_positions:
-                            self.no_duduco_positions.add((row - 1, mid_col))
-                        if row < self.size - 1 and (row + 1, mid_col) not in self.no_duduco_positions:
-                            self.no_duduco_positions.add((row + 1, mid_col))
+                for color, regions_list in self.regions.items():
+                    if color in self.duducos or color in self.current_placement:
+                        continue
+                    region = regions_list[0]
+                    unmarked = [p for p in region if self._is_valid_position(p[0], p[1])]
+                    if not unmarked:
+                        continue
+                    if all(p in neighbors for p in unmarked):
+                        self.no_duduco_positions.add((r, c))
                         updated = True
-                elif len(set(cols)) == 1:
-                    col, sorted_rows = cols[0], sorted(rows)
-                    if sorted_rows[2] - sorted_rows[0] == 2:
-                        mid_row = sorted_rows[1]
-                        if col > 0 and (mid_row, col - 1) not in self.no_duduco_positions:
-                            self.no_duduco_positions.add((mid_row, col - 1))
-                        if col < self.size - 1 and (mid_row, col + 1) not in self.no_duduco_positions:
-                            self.no_duduco_positions.add((mid_row, col + 1))
-                        updated = True
-                else:
-                    for pos in unmarked:
-                        r, c = pos
-                        has_above, has_below = (r - 1, c) in unmarked, (r + 1, c) in unmarked
-                        has_left, has_right = (r, c - 1) in unmarked, (r, c + 1) in unmarked
-                        
-                        if (has_above + has_below + has_left + has_right) == 2:
-                            if has_above and has_left and r + 1 < self.size and c + 1 < self.size:
-                                self.no_duduco_positions.add((r + 1, c + 1))
-                                updated = True
-                            elif has_above and has_right and r + 1 < self.size and c - 1 >= 0:
-                                self.no_duduco_positions.add((r + 1, c - 1))
-                                updated = True
-                            elif has_below and has_left and r - 1 >= 0 and c + 1 < self.size:
-                                self.no_duduco_positions.add((r - 1, c + 1))
-                                updated = True
-                            elif has_below and has_right and r - 1 >= 0 and c - 1 >= 0:
-                                self.no_duduco_positions.add((r - 1, c - 1))
-                                updated = True
-                            break
-            self.detected_colors.add(color)
+                        break
         return updated
 
     def _detection_loop(self):
         max_iterations = 100
         for iteration in range(max_iterations):
             changed = False
-            self.detected_colors.clear()
             
+            if self._detect_last_cell():
+                changed = True
             for n in range(1, self.size + 1):
                 if self._detect_n_color_shared_rows(n):
                     changed = True
-            if self._detect_three_cell_patterns():
-                changed = True
-            if self._detect_two_cell_patterns():
-                changed = True
-            if self._detect_last_cell():
-                changed = True
-            if self._detect_single_cell():
+            if self._detect_surrounded_exclusion():
                 changed = True
             
             if not changed:
@@ -482,8 +440,112 @@ class DuducoPuzzleSolver:
                 del self.current_placement[color]
         return False
 
+    def _mini_backtrack_two_colors(self) -> bool:
+        color_candidates = {}
+        for color in self.regions:
+            if color in self.duducos or color in self.current_placement:
+                continue
+            region = self.regions[color][0]
+            valid = [pos for pos in region if self._is_valid_position(pos[0], pos[1])]
+            if valid:
+                color_candidates[color] = valid
+
+        if len(color_candidates) < 2:
+            return False
+
+        sorted_colors = sorted(color_candidates.items(), key=lambda x: len(x[1]))
+        (color1, positions1), (color2, positions2) = sorted_colors[0], sorted_colors[1]
+
+        valid_combinations = []
+        for pos1 in positions1:
+            for pos2 in positions2:
+                if pos1 == pos2:
+                    continue
+                r1, c1 = pos1
+                r2, c2 = pos2
+                if r1 == r2 or c1 == c2:
+                    continue
+                if abs(r1 - r2) <= 1 and abs(c1 - c2) <= 1:
+                    continue
+                valid_combinations.append((pos1, pos2))
+
+        if not valid_combinations:
+            return False
+
+        branch_new_duducos = {}
+        branch_new_no_pos = []
+
+        for pos1, pos2 in valid_combinations:
+            old_duducos = self.duducos.copy()
+            old_no_rows = self.no_duduco_rows.copy()
+            old_no_cols = self.no_duduco_cols.copy()
+            old_no_pos = self.no_duduco_positions.copy()
+
+            self.duducos[color1] = pos1
+            self.duducos[color2] = pos2
+            r1, c1 = pos1
+            r2, c2 = pos2
+            self.no_duduco_rows.add(r1)
+            self.no_duduco_rows.add(r2)
+            self.no_duduco_cols.add(c1)
+            self.no_duduco_cols.add(c2)
+            for dr in [-1, 0, 1]:
+                for dc in [-1, 0, 1]:
+                    if dr == 0 and dc == 0:
+                        continue
+                    nr1, nc1 = r1 + dr, c1 + dc
+                    nr2, nc2 = r2 + dr, c2 + dc
+                    if 0 <= nr1 < self.size and 0 <= nc1 < self.size:
+                        self.no_duduco_positions.add((nr1, nc1))
+                    if 0 <= nr2 < self.size and 0 <= nc2 < self.size:
+                        self.no_duduco_positions.add((nr2, nc2))
+
+            self._detection_loop()
+
+            new_duducos = {c: p for c, p in self.duducos.items()
+                           if c not in old_duducos and c != color1 and c != color2}
+            branch_new_duducos[(pos1, pos2)] = new_duducos
+            branch_new_no_pos.append(self.no_duduco_positions - old_no_pos)
+
+            self.duducos = old_duducos
+            self.no_duduco_rows = old_no_rows
+            self.no_duduco_cols = old_no_cols
+            self.no_duduco_positions = old_no_pos
+
+        if not branch_new_duducos:
+            return False
+
+        found = False
+
+        branch_sets = [set(d.keys()) for d in branch_new_duducos.values()]
+        common_colors = branch_sets[0]
+        for s in branch_sets[1:]:
+            common_colors &= s
+
+        if common_colors:
+            for color in common_colors:
+                if color in self.duducos:
+                    continue
+                positions = [branch[color] for branch in branch_new_duducos.values()]
+                if len(set(positions)) == 1:
+                    self._mark_placement(color, positions[0])
+                    found = True
+
+        if branch_new_no_pos:
+            common_no = branch_new_no_pos[0].copy()
+            for s in branch_new_no_pos[1:]:
+                common_no &= s
+            for pos in common_no:
+                if pos not in self.no_duduco_positions:
+                    self.no_duduco_positions.add(pos)
+                    found = True
+
+        return found
+
     def solve(self):
         self._detection_loop()
+        while self._mini_backtrack_two_colors():
+            self._detection_loop()
         self._solve_region(len(self.duducos))
         return self.solutions
 
@@ -494,12 +556,12 @@ class DuducoPuzzleSolver:
         result.append("")
         
         result.append("解法结果（*表示嘟嘟可位置）：")
-        header = "   | " + " ".join(f"{i:2d}" for i in range(self.size))
+        header = "   | " + " ".join(f"{i+1:2d}" for i in range(self.size))
         result.append(header)
         result.append("---+-" + "--" * self.size)
         
         for r in range(self.size):
-            row_str = f"{r:2d} | "
+            row_str = f"{r+1:2d} | "
             for c in range(self.size):
                 pos = (r, c)
                 if pos in solution.values():
@@ -510,9 +572,8 @@ class DuducoPuzzleSolver:
         
         result.append("")
         result.append("嘟嘟可位置详情：")
-        for color in sorted(solution.keys()):
-            r, c = solution[color]
-            result.append(f"  颜色{color}: ({r}, {c})")
+        for color, (r, c) in sorted(solution.items(), key=lambda x: x[1][0]):
+            result.append(f"  颜色{color}: ({r+1}, {c+1})")
         
         return "\n".join(result)
 
@@ -572,7 +633,7 @@ class MainWindow:
     def __init__(self, root):
         self.root = root
         self.root.title("寻找嘟嘟可")
-        self.root.geometry("600x550")
+        self.root.geometry("720x660")
 
         self.recognizer = GridImageRecognizer()
         self.current_image = None
@@ -604,7 +665,7 @@ class MainWindow:
         main_frame.grid_rowconfigure(1, weight=1)     # 识别网格行自动扩展
 
         # 左上：图像显示（固定大小正方形）
-        left_frame = tk.Frame(main_frame, borderwidth=1, relief=tk.SUNKEN, width=220, height=220)
+        left_frame = tk.Frame(main_frame, borderwidth=1, relief=tk.SUNKEN, width=265, height=265)
         left_frame.grid(row=0, column=0, sticky="nw", padx=2, pady=2)
         left_frame.pack_propagate(False)  # 禁止自动调整大小
 
@@ -612,13 +673,13 @@ class MainWindow:
         image_label.pack(fill=tk.X)
 
         # 创建固定大小正方形画布用于显示图像
-        self.image_canvas = tk.Canvas(left_frame, bg='white', width=200, height=200)
+        self.image_canvas = tk.Canvas(left_frame, bg='white', width=240, height=240)
         self.image_canvas.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
         self.image_canvas.bind('<Configure>', self._resize_image)
         self.current_photo = None
 
         # 左下：识别结果
-        middle_frame = tk.Frame(main_frame, borderwidth=1, relief=tk.SUNKEN, width=220)
+        middle_frame = tk.Frame(main_frame, borderwidth=1, relief=tk.SUNKEN, width=265)
         middle_frame.grid(row=1, column=0, sticky="nsew", padx=2, pady=2)
         middle_frame.pack_propagate(False)
 

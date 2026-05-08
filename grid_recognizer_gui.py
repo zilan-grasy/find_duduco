@@ -145,20 +145,51 @@ class GridImageRecognizer:
         normalized[:, 1] = color_array[:, 1] / 255.0
         normalized[:, 2] = color_array[:, 2] / 255.0
         
-        best_labels, best_score = None, float('inf')
-        for _ in range(10):
-            try:
-                criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 300, 0.0001)
-                compactness, labels, centers = cv2.kmeans(
-                    normalized.reshape((-1, 3)), target_colors, None, criteria, 30, cv2.KMEANS_PP_CENTERS)
-                if compactness < best_score:
-                    best_score, best_labels = compactness, labels.flatten()
-            except:
-                continue
-        
-        if best_labels is None:
+        criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 300, 0.0001)
+        try:
+            compactness, labels, centers = cv2.kmeans(
+                normalized.reshape((-1, 3)), target_colors, None, criteria, 30, cv2.KMEANS_PP_CENTERS)
+            best_labels, best_centers = labels.flatten(), centers
+        except:
             return [[1 if c else 0 for c in row] for row in color_list]
+
+        merge_map = {}
+        n_clusters = len(best_centers)
+        for i in range(n_clusters):
+            merge_map[i] = i
+        for i in range(n_clusters):
+            for j in range(i + 1, n_clusters):
+                dist = np.linalg.norm(best_centers[i] - best_centers[j])
+                if dist < 0.08:
+                    root_i = i
+                    while merge_map[root_i] != root_i:
+                        root_i = merge_map[root_i]
+                    root_j = j
+                    while merge_map[root_j] != root_j:
+                        root_j = merge_map[root_j]
+                    if root_i != root_j:
+                        merge_map[max(root_i, root_j)] = min(root_i, root_j)
         
+        remap = {}
+        new_id = 0
+        for i in range(n_clusters):
+            root = i
+            while merge_map[root] != root:
+                root = merge_map[root]
+            if root not in remap:
+                remap[root] = new_id
+                new_id += 1
+            remap[i] = remap[root]
+
+        merged_centers = {}
+        for i in range(n_clusters):
+            mroot = remap[i]
+            if mroot not in merged_centers:
+                merged_centers[mroot] = []
+            merged_centers[mroot].append(best_centers[i])
+        for mroot in merged_centers:
+            merged_centers[mroot] = np.mean(merged_centers[mroot], axis=0)
+
         label_idx, result = 0, []
         for row in color_list:
             row_result = []
@@ -166,7 +197,9 @@ class GridImageRecognizer:
                 if color is None:
                     row_result.append(0)
                 else:
-                    row_result.append(best_labels[label_idx] + 1)
+                    raw_hash = (color[0] / 180.0, color[1] / 255.0, color[2] / 255.0)
+                    best_cluster = min(merged_centers.items(), key=lambda x: np.linalg.norm(raw_hash - x[1]))
+                    row_result.append(best_cluster[0] + 1)
                     label_idx += 1
             result.append(row_result)
         return result
@@ -183,7 +216,7 @@ class GridImageRecognizer:
                     return None
         hsv = cv2.cvtColor(cell, cv2.COLOR_BGR2HSV)
         avg_h, avg_s, avg_v = np.mean(hsv[:, :, 0]), np.mean(hsv[:, :, 1]), np.mean(hsv[:, :, 2])
-        if avg_s < 10 or avg_v > 250:
+        if avg_s < 10 or (avg_v > 245 and avg_s < 25):
             return None
         return (avg_h, avg_s, avg_v)
 
@@ -243,7 +276,7 @@ class MainWindow:
     def __init__(self, root):
         self.root = root
         self.root.title("寻找嘟嘟可")
-        self.root.geometry("600x550")
+        self.root.geometry("720x660")
 
         self.recognizer = GridImageRecognizer()
         self.current_image = None
@@ -277,7 +310,7 @@ class MainWindow:
         main_frame.grid_rowconfigure(1, weight=1)     # 识别网格行自动扩展
 
         # 左上：图像显示（固定大小正方形）
-        left_frame = tk.Frame(main_frame, borderwidth=1, relief=tk.SUNKEN, width=220, height=220)
+        left_frame = tk.Frame(main_frame, borderwidth=1, relief=tk.SUNKEN, width=265, height=265)
         left_frame.grid(row=0, column=0, sticky="nw", padx=2, pady=2)
         left_frame.pack_propagate(False)  # 禁止自动调整大小
 
@@ -285,13 +318,13 @@ class MainWindow:
         image_label.pack(fill=tk.X)
 
         # 创建固定大小正方形画布用于显示图像
-        self.image_canvas = tk.Canvas(left_frame, bg='white', width=200, height=200)
+        self.image_canvas = tk.Canvas(left_frame, bg='white', width=240, height=240)
         self.image_canvas.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
         self.image_canvas.bind('<Configure>', self._resize_image)
         self.current_photo = None
 
         # 左下：识别结果
-        middle_frame = tk.Frame(main_frame, borderwidth=1, relief=tk.SUNKEN, width=220)
+        middle_frame = tk.Frame(main_frame, borderwidth=1, relief=tk.SUNKEN, width=265)
         middle_frame.grid(row=1, column=0, sticky="nsew", padx=2, pady=2)
         middle_frame.pack_propagate(False)
 
