@@ -22,6 +22,9 @@ class GridImageRecognizer:
 
     def __init__(self):
         self.grid = []
+        self._board_crop_bbox = None
+        self._last_h_peaks = None
+        self._last_v_peaks = None
 
     def _cluster_lines(self, lines, threshold=10):
         if not lines:
@@ -38,18 +41,10 @@ class GridImageRecognizer:
         clusters.append(current_cluster)
         return [sum(c) / len(c) for c in clusters]
 
-    def _find_grid_lines_contour(self, edges):
-        height, width = edges.shape
-        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
-        closed = cv2.morphologyEx(edges, cv2.MORPH_CLOSE, kernel)
-        dilated = cv2.dilate(closed, kernel, iterations=2)
-        contours, hierarchy = cv2.findContours(dilated, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        if not contours:
-            return [], []
-        
+    def _find_grid_lines(self, edges, height, width):
         horizontal_projection = np.sum(edges, axis=0)
         vertical_projection = np.sum(edges, axis=1)
-        
+
         def find_peaks(projection, threshold_ratio=0.1):
             threshold = np.max(projection) * threshold_ratio
             peaks, in_peak, peak_start = [], False, 0
@@ -64,24 +59,23 @@ class GridImageRecognizer:
             if in_peak:
                 peaks.append((peak_start + len(projection)) // 2)
             return peaks
-        
-        return find_peaks(vertical_projection, 0.15), find_peaks(horizontal_projection, 0.15)
 
-    def _find_grid_lines_hough(self, edges, height, width):
-        min_line_length = min(width, height) // 5
-        lines = cv2.HoughLinesP(edges, 1, np.pi/180, threshold=40,
-                                minLineLength=min_line_length, maxLineGap=15)
-        if lines is None:
-            return [], []
-        
-        horizontal_lines, vertical_lines = [], []
-        for line in lines:
-            x1, y1, x2, y2 = line[0]
-            if abs(x2 - x1) > abs(y2 - y1):
-                horizontal_lines.append((y1 + y2) / 2)
-            else:
-                vertical_lines.append((x1 + x2) / 2)
-        return horizontal_lines, vertical_lines
+        h_lines = find_peaks(vertical_projection, 0.15)
+        v_lines = find_peaks(horizontal_projection, 0.15)
+
+        if len(h_lines) < 3 or len(v_lines) < 3:
+            min_line_length = min(width, height) // 5
+            lines = cv2.HoughLinesP(edges, 1, np.pi / 180, threshold=40,
+                                    minLineLength=min_line_length, maxLineGap=15)
+            if lines is not None:
+                for line in lines:
+                    x1, y1, x2, y2 = line[0]
+                    if abs(x2 - x1) > abs(y2 - y1):
+                        h_lines.append((y1 + y2) / 2)
+                    else:
+                        v_lines.append((x1 + x2) / 2)
+
+        return h_lines, v_lines
 
     def recognize_from_image(self, image):
         open_cv_image = np.array(image)
@@ -94,22 +88,23 @@ class GridImageRecognizer:
         blurred = cv2.GaussianBlur(gray, (5, 5), 0)
         edges = cv2.Canny(blurred, 30, 100, apertureSize=3)
         
-        h_lines, v_lines = self._find_grid_lines_contour(edges)
-        if len(h_lines) < 3 or len(v_lines) < 3:
-            h_lines2, v_lines2 = self._find_grid_lines_hough(edges, height, width)
-            h_lines += h_lines2
-            v_lines += v_lines2
-        
+        h_lines, v_lines = self._find_grid_lines(edges, height, width)
+
         if len(h_lines) < 2 or len(v_lines) < 2:
             return None
-        
-        h_lines = self._cluster_lines(h_lines, threshold=height//25)
-        v_lines = self._cluster_lines(v_lines, threshold=width//25)
-        
+
+        h_lines = self._cluster_lines(h_lines, threshold=height // 25)
+        v_lines = self._cluster_lines(v_lines, threshold=width // 25)
+
         if len(h_lines) < 2 or len(v_lines) < 2:
             return None
-        
+
+        if len(h_lines) > 16 or len(v_lines) > 16:
+            return None
+
         h_lines, v_lines = sorted(h_lines), sorted(v_lines)
+        self._last_h_peaks = list(h_lines)
+        self._last_v_peaks = list(v_lines)
         cells = []
         for i in range(len(h_lines) - 1):
             row = []
@@ -219,12 +214,123 @@ class GridImageRecognizer:
             return None
         return (avg_h, avg_s, avg_v)
 
+    def get_cell_center(self, row, col):
+        if self._last_h_peaks is None or self._last_v_peaks is None:
+            return None
+        if row < 0 or row >= len(self._last_h_peaks) - 1:
+            return None
+        if col < 0 or col >= len(self._last_v_peaks) - 1:
+            return None
+        cx = (self._last_v_peaks[col] + self._last_v_peaks[col + 1]) / 2
+        cy = (self._last_h_peaks[row] + self._last_h_peaks[row + 1]) / 2
+        return (cx, cy)
+
+    # BETA: 全屏截图自动定位棋盘区域，算法仍在优化中
+    def auto_detect_board(self, image):
+        self._board_crop_bbox = None
+        open_cv_image = np.array(image)
+        if len(open_cv_image.shape) == 3 and open_cv_image.shape[2] == 4:
+            open_cv_image = open_cv_image[:, :, :3]
+        open_cv_image_bgr = open_cv_image[:, :, ::-1].copy()
+
+        orig_h, orig_w = open_cv_image_bgr.shape[:2]
+
+        target = 400
+        scale = min(1.0, target / max(orig_h, orig_w))
+        if scale < 1.0:
+            small = cv2.resize(open_cv_image_bgr, (int(orig_w * scale), int(orig_h * scale)))
+        else:
+            small = open_cv_image_bgr
+        small_h, small_w = small.shape[:2]
+
+        gray = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)
+
+        gx = np.abs(cv2.Sobel(gray, cv2.CV_64F, 1, 0, ksize=3))
+        gy = np.abs(cv2.Sobel(gray, cv2.CV_64F, 0, 1, ksize=3))
+        edge = np.clip(gx + gy, 0, 255).astype(np.uint8)
+
+        _, binary = cv2.threshold(edge, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+
+        h_proj = np.sum(binary > 0, axis=1).astype(np.float64)
+        v_proj = np.sum(binary > 0, axis=0).astype(np.float64)
+
+        radius = max(5, min(small_w, small_h) // 6)
+        kernel = np.ones(radius * 2 + 1) / (radius * 2 + 1)
+        h_env = np.convolve(h_proj, kernel, mode='same')
+        v_env = np.convolve(v_proj, kernel, mode='same')
+
+        if h_env.max() <= 0 or v_env.max() <= 0:
+            return None
+
+        h_thresh = h_env.max() * 0.3
+        v_thresh = v_env.max() * 0.3
+
+        def find_regions(signal, thresh):
+            regions = []
+            in_region = False
+            start = 0
+            for i in range(len(signal)):
+                if signal[i] >= thresh and not in_region:
+                    in_region = True
+                    start = i
+                elif signal[i] < thresh and in_region:
+                    in_region = False
+                    if i - start >= 3:
+                        regions.append((start, i - 1))
+            if in_region and len(signal) - start >= 3:
+                regions.append((start, len(signal) - 1))
+            return regions
+
+        h_regions = find_regions(h_env, h_thresh)
+        v_regions = find_regions(v_env, v_thresh)
+
+        if not h_regions or not v_regions:
+            return None
+
+        best = None
+        best_score = 0
+        for hy1, hy2 in h_regions:
+            for vx1, vx2 in v_regions:
+                rw = vx2 - vx1
+                rh = hy2 - hy1
+                if rw < 10 or rh < 10:
+                    continue
+                aspect = max(rw, rh) / max(min(rw, rh), 1)
+                if aspect > 1.8:
+                    continue
+                score = min(rw, rh) * (2.0 - aspect)
+                if score > best_score:
+                    best_score = score
+                    best = (vx1, hy1, vx2, hy2)
+
+        if best is None:
+            return None
+
+        vx1, hy1, vx2, hy2 = best
+        if scale < 1.0:
+            inv = 1.0 / scale
+            vx1, hy1 = int(vx1 * inv), int(hy1 * inv)
+            vx2, hy2 = int(vx2 * inv), int(hy2 * inv)
+
+        margin = 15
+        vx1 = max(0, vx1 - margin)
+        hy1 = max(0, hy1 - margin)
+        vx2 = min(orig_w, vx2 + margin)
+        hy2 = min(orig_h, hy2 + margin)
+
+        cropped = open_cv_image_bgr[hy1:hy2, vx1:vx2]
+        self._board_crop_bbox = (vx1, hy1, vx2, hy2)
+        return Image.fromarray(cropped[:, :, ::-1])
+
+
 class DuducoPuzzleSolver:
     """嘟嘟可谜题求解器"""
     
     def __init__(self, grid: List[List[int]], num_colors: int):
         self.grid = grid
         self.size = len(grid)
+        if self.size > 15:
+            raise ValueError(f"网格大小 {self.size} 超过上限 15")
         self.num_colors = num_colors
         self.regions = self._find_regions()
         self.solutions = []
@@ -234,10 +340,40 @@ class DuducoPuzzleSolver:
         self.no_duduco_cols = set()
         self.no_duduco_positions = set()
     
-    def _is_valid_position(self, r: int, c: int) -> bool:
-        return (r not in self.no_duduco_rows and 
-                c not in self.no_duduco_cols and 
-                (r, c) not in self.no_duduco_positions)
+    def solve(self):
+        self._detection_loop()
+        while self._mini_backtrack_two_colors():
+            self._detection_loop()
+        self._solve_region(len(self.duducos))
+        return self.solutions
+
+    def format_solution(self, solution: Dict[int, Tuple[int, int]]) -> str:
+        result = []
+        result.append(f"网格大小: {self.size}x{self.size}")
+        result.append(f"嘟嘟可数量: {len(solution)}")
+        result.append("")
+        
+        result.append("解法结果（*表示嘟嘟可位置）：")
+        header = "   | " + " ".join(f"{i+1:2d}" for i in range(self.size))
+        result.append(header)
+        result.append("---+-" + "--" * self.size)
+        
+        for r in range(self.size):
+            row_str = f"{r+1:2d} | "
+            for c in range(self.size):
+                pos = (r, c)
+                if pos in solution.values():
+                    row_str += " * "
+                else:
+                    row_str += f"{self.grid[r][c]:2d} "
+            result.append(row_str)
+        
+        result.append("")
+        result.append("嘟嘟可位置详情：")
+        for color, (r, c) in sorted(solution.items(), key=lambda x: x[1][0]):
+            result.append(f"  颜色{color}: ({r+1}, {c+1})")
+        
+        return "\n".join(result)
 
     def _find_regions(self) -> Dict[int, List[Tuple[int, int]]]:
         visited, regions = set(), defaultdict(list)
@@ -262,6 +398,11 @@ class DuducoPuzzleSolver:
                     if self.grid[nr][nc] == color:
                         queue.append((nr, nc))
         return region
+
+    def _is_valid_position(self, r: int, c: int) -> bool:
+        return (r not in self.no_duduco_rows and 
+                c not in self.no_duduco_cols and 
+                (r, c) not in self.no_duduco_positions)
 
     def _mark_placement(self, color: int, pos: Tuple[int, int]):
         r, c = pos
@@ -397,49 +538,6 @@ class DuducoPuzzleSolver:
             if not changed:
                 break
 
-    def _solve_region(self, placed_count: int) -> bool:
-        if placed_count >= len(self.regions):
-            solution = {**self.duducos, **self.current_placement}
-            self.solutions.append(solution)
-            return True
-
-        for color in sorted(self.regions.keys()):
-            if color in self.duducos or color in self.current_placement:
-                continue
-                
-            region = self.regions[color][0]
-            valid_positions = [pos for pos in region if self._is_valid_position(pos[0], pos[1])]
-            
-            if not valid_positions:
-                return False
-            
-            for pos in valid_positions:
-                self.current_placement[color] = pos
-                r, c = pos
-                
-                old_no_duduco_rows = self.no_duduco_rows.copy()
-                old_no_duduco_cols = self.no_duduco_cols.copy()
-                old_no_duduco_positions = self.no_duduco_positions.copy()
-                
-                self.no_duduco_rows.add(r)
-                self.no_duduco_cols.add(c)
-                for dr in [-1, 0, 1]:
-                    for dc in [-1, 0, 1]:
-                        if dr == 0 and dc == 0:
-                            continue
-                        nr, nc = r + dr, c + dc
-                        if 0 <= nr < self.size and 0 <= nc < self.size:
-                            self.no_duduco_positions.add((nr, nc))
-                
-                if self._solve_region(placed_count + 1):
-                    return True
-                
-                self.no_duduco_rows = old_no_duduco_rows
-                self.no_duduco_cols = old_no_duduco_cols
-                self.no_duduco_positions = old_no_duduco_positions
-                del self.current_placement[color]
-        return False
-
     def _mini_backtrack_two_colors(self) -> bool:
         color_candidates = {}
         for color in self.regions:
@@ -542,40 +640,48 @@ class DuducoPuzzleSolver:
 
         return found
 
-    def solve(self):
-        self._detection_loop()
-        while self._mini_backtrack_two_colors():
-            self._detection_loop()
-        self._solve_region(len(self.duducos))
-        return self.solutions
+    def _solve_region(self, placed_count: int) -> bool:
+        if placed_count >= len(self.regions):
+            solution = {**self.duducos, **self.current_placement}
+            self.solutions.append(solution)
+            return True
 
-    def format_solution(self, solution: Dict[int, Tuple[int, int]]) -> str:
-        result = []
-        result.append(f"网格大小: {self.size}x{self.size}")
-        result.append(f"嘟嘟可数量: {len(solution)}")
-        result.append("")
-        
-        result.append("解法结果（*表示嘟嘟可位置）：")
-        header = "   | " + " ".join(f"{i+1:2d}" for i in range(self.size))
-        result.append(header)
-        result.append("---+-" + "--" * self.size)
-        
-        for r in range(self.size):
-            row_str = f"{r+1:2d} | "
-            for c in range(self.size):
-                pos = (r, c)
-                if pos in solution.values():
-                    row_str += " * "
-                else:
-                    row_str += f"{self.grid[r][c]:2d} "
-            result.append(row_str)
-        
-        result.append("")
-        result.append("嘟嘟可位置详情：")
-        for color, (r, c) in sorted(solution.items(), key=lambda x: x[1][0]):
-            result.append(f"  颜色{color}: ({r+1}, {c+1})")
-        
-        return "\n".join(result)
+        for color in sorted(self.regions.keys()):
+            if color in self.duducos or color in self.current_placement:
+                continue
+                
+            region = self.regions[color][0]
+            valid_positions = [pos for pos in region if self._is_valid_position(pos[0], pos[1])]
+            
+            if not valid_positions:
+                return False
+            
+            for pos in valid_positions:
+                self.current_placement[color] = pos
+                r, c = pos
+                
+                old_no_duduco_rows = self.no_duduco_rows.copy()
+                old_no_duduco_cols = self.no_duduco_cols.copy()
+                old_no_duduco_positions = self.no_duduco_positions.copy()
+                
+                self.no_duduco_rows.add(r)
+                self.no_duduco_cols.add(c)
+                for dr in [-1, 0, 1]:
+                    for dc in [-1, 0, 1]:
+                        if dr == 0 and dc == 0:
+                            continue
+                        nr, nc = r + dr, c + dc
+                        if 0 <= nr < self.size and 0 <= nc < self.size:
+                            self.no_duduco_positions.add((nr, nc))
+                
+                if self._solve_region(placed_count + 1):
+                    return True
+                
+                self.no_duduco_rows = old_no_duduco_rows
+                self.no_duduco_cols = old_no_duduco_cols
+                self.no_duduco_positions = old_no_duduco_positions
+                del self.current_placement[color]
+        return False
 
 class ScreenshotSelector:
     """截图选择器"""
@@ -585,6 +691,7 @@ class ScreenshotSelector:
         self.start_x = self.start_y = self.current_x = self.current_y = 0
         self.rect = None
         self.screenshot = None
+        self.bbox = None
 
         import ctypes
         user32 = ctypes.windll.user32
@@ -622,6 +729,7 @@ class ScreenshotSelector:
         x2, y2 = max(self.start_x, self.current_x), max(self.start_y, self.current_y)
         if x2 - x1 > 10 and y2 - y1 > 10:
             self.screenshot = ImageGrab.grab(bbox=(x1, y1, x2, y2))
+            self.bbox = (x1, y1, x2, y2)
         self.root.destroy()
 
     def on_escape(self, event):
@@ -639,6 +747,7 @@ class MainWindow:
         self.current_image = None
         self.recognized_grid = None
         self.solution = None
+        self.board_screen_bbox = None
 
         # 工具栏
         toolbar = tk.Frame(root, bg='lightgray')
@@ -649,6 +758,12 @@ class MainWindow:
 
         self.btn_capture = tk.Button(toolbar, text="截图识别", command=self.capture_screenshot)
         self.btn_capture.pack(side=tk.LEFT, padx=2)
+
+        self.btn_auto = tk.Button(toolbar, text="自动识别(beta)", command=self.auto_capture_and_recognize)
+        self.btn_auto.pack(side=tk.LEFT, padx=2)
+
+        self.btn_click = tk.Button(toolbar, text="点击嘟嘟可", command=self.click_duducos)
+        self.btn_click.pack(side=tk.LEFT, padx=2)
 
         self.btn_topmost = tk.Button(toolbar, text="置顶", command=self.toggle_topmost)
         self.btn_topmost.pack(side=tk.RIGHT, padx=2)
@@ -706,6 +821,7 @@ class MainWindow:
         if file_path:
             try:
                 self.current_image = Image.open(file_path)
+                self.board_screen_bbox = None
                 self.display_image()
                 self.recognize_and_solve()
             except Exception as e:
@@ -718,9 +834,88 @@ class MainWindow:
         
         if selector.screenshot:
             self.current_image = selector.screenshot
+            self.board_screen_bbox = selector.bbox
             self.display_image()
             self.recognize_and_solve()
         
+        self.root.deiconify()
+
+    def auto_capture_and_recognize(self):
+        self.root.iconify()
+        self.root.update()
+        import time
+        time.sleep(0.3)
+        
+        try:
+            full_screenshot = ImageGrab.grab()
+        except Exception as e:
+            self.root.deiconify()
+            messagebox.showerror("错误", f"截图失败: {str(e)}")
+            return
+        
+        self.root.deiconify()
+        self.root.update()
+        
+        self.grid_text.delete(1.0, tk.END)
+        self.solution_text.delete(1.0, tk.END)
+        self.grid_text.insert(tk.END, "正在自动检测棋盘区域...\n")
+        self.root.update()
+        
+        board_image = self.recognizer.auto_detect_board(full_screenshot)
+        
+        if board_image is None:
+            self.board_screen_bbox = None
+            self.grid_text.delete(1.0, tk.END)
+            self.grid_text.insert(tk.END, "未检测到棋盘区域\n")
+            self.grid_text.insert(tk.END, "请使用「截图识别」手动框选\n")
+            self.solution_text.delete(1.0, tk.END)
+            self.solution_text.insert(tk.END, "自动检测失败，未能找到棋盘区域。\n请确保游戏窗口完整显示在屏幕上。", "gray_text")
+            return
+        
+        self.current_image = board_image
+        self.board_screen_bbox = self.recognizer._board_crop_bbox
+        self.display_image()
+        self.root.update_idletasks()
+        
+        self.grid_text.delete(1.0, tk.END)
+        self.grid_text.insert(tk.END, "检测到棋盘，开始识别...\n")
+        self.root.update()
+        
+        self.recognize_and_solve()
+
+    def click_duducos(self):
+        if self.solution is None:
+            messagebox.showwarning("提示", "请先识别并解题")
+            return
+        if self.board_screen_bbox is None:
+            messagebox.showwarning("提示", "缺少棋盘屏幕坐标，请使用截图识别或自动识别")
+            return
+
+        bbox = self.board_screen_bbox
+        bx, by = bbox[0], bbox[1]
+
+        self.root.iconify()
+        self.root.update()
+        import time
+        time.sleep(0.3)
+
+        user32 = ctypes.windll.user32
+
+        for color, (row, col) in sorted(self.solution.items()):
+            center = self.recognizer.get_cell_center(row, col)
+            if center is None:
+                continue
+            sx = int(bx + center[0])
+            sy = int(by + center[1])
+            user32.SetCursorPos(sx, sy)
+            time.sleep(0.05)
+            for _ in range(2):
+                user32.mouse_event(0x0002, 0, 0, 0, 0)
+                time.sleep(0.01)
+                user32.mouse_event(0x0004, 0, 0, 0, 0)
+                time.sleep(0.01)
+            time.sleep(0.08)
+
         self.root.deiconify()
 
     def toggle_topmost(self):
@@ -766,8 +961,6 @@ class MainWindow:
         self._resize_image()
 
     def recognize_and_solve(self):
-        """自动识别网格并解题，直接显示结果"""
-        print("DEBUG: recognize_and_solve called")
         if self.current_image:
             try:
                 # 清空之前的结果
@@ -778,9 +971,7 @@ class MainWindow:
                 self.grid_text.insert(tk.END, "正在识别网格...\n")
                 self.root.update()
                 
-                print("DEBUG: calling recognize_from_image")
                 self.recognized_grid = self.recognizer.recognize_from_image(self.current_image)
-                print(f"DEBUG: recognized_grid = {self.recognized_grid}")
                 
                 if self.recognized_grid:
                     size = len(self.recognized_grid)
