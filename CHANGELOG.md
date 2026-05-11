@@ -1,5 +1,33 @@
 # 寻找嘟嘟可 — 更新日志
 
+## v1.2.0 (2026-05-11)
+
+### 重构
+- **消除代码重复**：`find_duduco.py` 通过 `import` 关联三个子模块，不再内联相同逻辑
+- `GridImageRecognizer` 精简为状态持有者（~35行），识别/检测委托子模块执行
+- 移除内联导入（`cv2`、`numpy`、`collections.defaultdict`、`typing` 等）
+- `DuducoPuzzleSolver` 不再内联定义，从 `duduco_solve.py` import
+
+### 约束规则统一
+- **规则2 升级为双向鸽巢原理**：N 色跨 N 行/列时，同时执行占位排除（该范围其他色排除）和定域排除（该 N 色在其他范围也排除）
+- **规则4（全行/列同色）并入规则2**：规则4 是双向鸽巢 n=1 的特例
+- `_detection_loop` 从 4 条规则简化为 3 条
+
+### 新增
+- **README.md**：完整文档（功能介绍、快速开始、测试、独立模块用法、求解算法、常见问题、免责声明、MIT 许可证）
+- **LICENSE**：MIT 开源许可
+- **`test1_output.txt`**：文本格式示例（test1.png 的识别结果），供 `duduco_solve.py` CLI 测试
+- **子模块 CLI 入口**：`grid_recog.py`（图像→文本）、`duduco_solve.py`（文本→解法）可独立命令行运行
+- **虚拟环境打包支持**：`.vscode/settings.json` 配置虚拟环境解释器路径
+- 全部文件添加中文注释（类/方法 docstring + 行内标注）
+
+### 优化
+- 清理未使用变量（`self.grid`、`compactness`、`best_labels`、`import sys` 等）
+- 清理孤立注释残留
+- 恢复方法的 BETA 标识
+
+---
+
 ## v1.1.0 (2026-05-10)
 
 ### 新增
