@@ -3,6 +3,14 @@ from typing import List, Tuple, Set, Dict
 
 
 class DuducoPuzzleSolver:
+    """嘟嘟可谜题求解器。
+    核心策略：约束传播(4条规则迭代至不动点) + 双色迷你回溯 + 主递归回溯。
+    
+    数据结构：
+    - duducos: 已确认的嘟嘟可位置 {颜色号: (行,列)}
+    - no_duduco_rows/cols: 已被占用的行/列
+    - no_duduco_positions: 被排除的格子(嘟嘟可相邻8格等)
+    - current_placement: 回溯时的临时放置"""
 
     def __init__(self, grid: List[List[int]], num_colors: int):
         self.grid = grid
@@ -19,6 +27,7 @@ class DuducoPuzzleSolver:
         self.no_duduco_positions = set()
 
     def solve(self):
+        """主求解入口：约束传播 → 双色回溯穿插 → 主递归回溯"""
         self._detection_loop()
         while self._mini_backtrack_two_colors():
             self._detection_loop()
@@ -26,6 +35,7 @@ class DuducoPuzzleSolver:
         return self.solutions
 
     def format_solution(self, solution: Dict[int, Tuple[int, int]]) -> str:
+        """将解法格式化为可读文本：网格可视化 + 按行排序的坐标列表"""
         result = []
         result.append(f"网格大小: {self.size}x{self.size}")
         result.append(f"嘟嘟可数量: {len(solution)}")
@@ -54,6 +64,7 @@ class DuducoPuzzleSolver:
         return "\n".join(result)
 
     def _find_regions(self) -> Dict[int, List[Tuple[int, int]]]:
+        """BFS连通域分析：为每种颜色找出所有连通块"""
         visited, regions = set(), defaultdict(list)
         for r in range(self.size):
             for c in range(self.size):
@@ -63,6 +74,7 @@ class DuducoPuzzleSolver:
         return regions
 
     def _bfs_region(self, start_r: int, start_c: int, color: int, visited: Set[Tuple[int, int]]) -> List[Tuple[int, int]]:
+        """BFS搜索单个颜色的连通区域（4方向）"""
         region, queue, directions = [], [(start_r, start_c)], [(-1, 0), (1, 0), (0, -1), (0, 1)]
         while queue:
             r, c = queue.pop(0)
@@ -78,11 +90,13 @@ class DuducoPuzzleSolver:
         return region
 
     def _is_valid_position(self, r: int, c: int) -> bool:
+        """检查(r,c)是否仍是合法的嘟嘟可候选位置"""
         return (r not in self.no_duduco_rows and
                 c not in self.no_duduco_cols and
                 (r, c) not in self.no_duduco_positions)
 
     def _mark_placement(self, color: int, pos: Tuple[int, int]):
+        """确认放置：记录嘟嘟可位置，排除同行、同列、周围8格"""
         r, c = pos
         self.duducos[color] = pos
         self.no_duduco_rows.add(r)
@@ -96,6 +110,7 @@ class DuducoPuzzleSolver:
                     self.no_duduco_positions.add((nr, nc))
 
     def _detect_last_cell(self) -> bool:
+        """规则1·最后一格：某行/某列只剩1个合法格子 → 必为嘟嘟可"""
         for r in range(self.size):
             if r in self.no_duduco_rows:
                 continue
@@ -120,6 +135,10 @@ class DuducoPuzzleSolver:
         return False
 
     def _detect_n_color_shared_rows(self, n: int) -> bool:
+        """规则2·鸽巢原理（双向）：
+        N种颜色的候选位置仅跨N行(或N列) →
+          a) 那N行/列上其他颜色的格子排除（鸽子不够，占位排除）
+          b) 那N种颜色在其他行/列的格子也排除（鸽子变多，定域排除）"""
         updated = False
         colors = list(self.regions.keys())
         if len(colors) < n:
@@ -148,6 +167,12 @@ class DuducoPuzzleSolver:
                             if pos not in self.no_duduco_positions:
                                 self.no_duduco_positions.add(pos)
                                 updated = True
+                for color in color_combination:
+                    for pos in self.regions[color][0]:
+                        rr, cc = pos
+                        if rr not in all_rows and self._is_valid_position(rr, cc):
+                            self.no_duduco_positions.add((rr, cc))
+                            updated = True
 
         for color_combination in combinations(colors, n):
             if any(c in self.duducos or c in self.current_placement for c in color_combination):
@@ -170,9 +195,17 @@ class DuducoPuzzleSolver:
                             if pos not in self.no_duduco_positions:
                                 self.no_duduco_positions.add(pos)
                                 updated = True
+                for color in color_combination:
+                    for pos in self.regions[color][0]:
+                        rr, cc = pos
+                        if cc not in all_cols and self._is_valid_position(rr, cc):
+                            self.no_duduco_positions.add((rr, cc))
+                            updated = True
         return updated
 
     def _detect_surrounded_exclusion(self) -> bool:
+        """规则3·包围排除：若某格子的8邻域包含了某颜色全部剩余候选格，则该格不可放嘟嘟可。
+        通用规则，覆盖L形剔除、两格排除、单格排除等所有特例"""
         updated = False
         for r in range(self.size):
             for c in range(self.size):
@@ -201,6 +234,7 @@ class DuducoPuzzleSolver:
         return updated
 
     def _detection_loop(self):
+        """约束传播主循环：迭代3条规则直到不再产生新发现(不动点)，最多100轮"""
         max_iterations = 100
         for iteration in range(max_iterations):
             changed = False
@@ -217,6 +251,9 @@ class DuducoPuzzleSolver:
                 break
 
     def _mini_backtrack_two_colors(self) -> bool:
+        """双色迷你回溯：约束传播卡住时，取候选最少的2种颜色穷举所有合法组合。
+        跑完约束后交叉验证——若所有分支都推导出相同的放置/排除，则这些公共发现是确定的。
+        这是不完全回溯，不保存完整解，只提取公共推理结果。"""
         color_candidates = {}
         for color in self.regions:
             if color in self.duducos or color in self.current_placement:
@@ -239,6 +276,7 @@ class DuducoPuzzleSolver:
                     continue
                 r1, c1 = pos1
                 r2, c2 = pos2
+                # 嘟嘟可不能同行、同列、相邻
                 if r1 == r2 or c1 == c2:
                     continue
                 if abs(r1 - r2) <= 1 and abs(c1 - c2) <= 1:
@@ -298,6 +336,7 @@ class DuducoPuzzleSolver:
         for s in branch_sets[1:]:
             common_colors &= s
 
+        # 所有分支公共推导出的放置 → 确认
         if common_colors:
             for color in common_colors:
                 if color in self.duducos:
@@ -311,6 +350,7 @@ class DuducoPuzzleSolver:
             common_no = branch_new_no_pos[0].copy()
             for s in branch_new_no_pos[1:]:
                 common_no &= s
+            # 所有分支公共排除的格子 → 确认排除
             for pos in common_no:
                 if pos not in self.no_duduco_positions:
                     self.no_duduco_positions.add(pos)
@@ -319,6 +359,8 @@ class DuducoPuzzleSolver:
         return found
 
     def _solve_region(self, placed_count: int) -> bool:
+        """主递归回溯：对剩余颜色逐一尝试合法位置，保存/恢复约束状态。
+        找到第一个完整解即返回True。"""
         if placed_count >= len(self.regions):
             solution = {**self.duducos, **self.current_placement}
             self.solutions.append(solution)
@@ -360,3 +402,27 @@ class DuducoPuzzleSolver:
                 self.no_duduco_positions = old_no_duduco_positions
                 del self.current_placement[color]
         return False
+
+
+if __name__ == "__main__":
+    import sys
+    if len(sys.argv) < 2:
+        print("用法: python duduco_solve.py <输入文件>")
+        print("  输入文件格式：首行为网格大小，后续每行为空格分隔的颜色编号")
+        print("  示例文件: test1_output.txt")
+        sys.exit(1)
+    with open(sys.argv[1], encoding='utf-8') as f:
+        lines = f.read().strip().split('\n')
+    size = int(lines[0])
+    grid = []
+    for line in lines[1:]:
+        grid.append([int(x) for x in line.split()])
+    colors = set()
+    for row in grid:
+        colors.update(row)
+    solver = DuducoPuzzleSolver(grid, len(colors))
+    solutions = solver.solve()
+    if solutions:
+        print(solver.format_solution(solutions[0]))
+    else:
+        print("未找到解")

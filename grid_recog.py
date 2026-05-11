@@ -4,6 +4,7 @@ from PIL import Image
 
 
 def _cluster_lines(lines, threshold=10):
+    """将靠近的直线合并聚类，返回每簇的平均值"""
     if not lines:
         return []
     lines = sorted(lines)
@@ -20,6 +21,7 @@ def _cluster_lines(lines, threshold=10):
 
 
 def _find_grid_lines(edges, height, width):
+    """从边缘图中检测网格线：先投影峰值法，不足时回退 Hough 直线检测"""
     horizontal_projection = np.sum(edges, axis=0)
     vertical_projection = np.sum(edges, axis=1)
 
@@ -57,6 +59,7 @@ def _find_grid_lines(edges, height, width):
 
 
 def _get_dominant_color(cell, use_center=False):
+    """提取格子主色：转HSV后取均值，白色/低饱和视为空白(返回None)"""
     if cell.size == 0:
         return None
     if use_center:
@@ -74,6 +77,7 @@ def _get_dominant_color(cell, use_center=False):
 
 
 def get_cell_center(h_lines, v_lines, row, col):
+    """根据网格线坐标计算指定格子(row,col)的中心点屏幕坐标"""
     if h_lines is None or v_lines is None:
         return None
     if row < 0 or row >= len(h_lines) - 1:
@@ -86,6 +90,10 @@ def get_cell_center(h_lines, v_lines, row, col):
 
 
 def recognize_from_image(image):
+    """完整的网格识别流程：
+    1. 边缘检测(Canny) → 网格线提取 → 切分格子
+    2. 每格取中心区域 HSV 均值 → 过滤白色/空白
+    3. K-means 聚类 + Union-Find 合并近色簇 → 输出颜色编号矩阵"""
     open_cv_image = np.array(image)
     if len(open_cv_image.shape) == 3 and open_cv_image.shape[2] == 4:
         open_cv_image = open_cv_image[:, :, :3]
@@ -151,12 +159,13 @@ def recognize_from_image(image):
 
     criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 300, 0.0001)
     try:
-        compactness, labels, centers = cv2.kmeans(
+        _, _, centers = cv2.kmeans(
             normalized.reshape((-1, 3)), target_colors, None, criteria, 30, cv2.KMEANS_PP_CENTERS)
-        best_labels, best_centers = labels.flatten(), centers
+        best_centers = centers
     except:
         return [[1 if c else 0 for c in row] for row in color_list]
 
+    # Union-Find 合并距离过近的聚类中心，避免同一颜色被拆成多个编号
     merge_map = {}
     n_clusters = len(best_centers)
     for i in range(n_clusters):
@@ -218,3 +227,23 @@ def recognize_and_format(image):
     for row in grid:
         text.append(" ".join(str(c) for c in row))
     return "\n".join(text), lines
+
+
+if __name__ == "__main__":
+    import sys
+    if len(sys.argv) < 2:
+        print("用法: python grid_recog.py <图像路径> [输出文件]")
+        print("  将识别结果输出为文本，格式：首行为网格大小，后续每行为空格分隔的颜色编号")
+        sys.exit(1)
+    img = Image.open(sys.argv[1])
+    result = recognize_and_format(img)
+    if result is None:
+        print("识别失败")
+        sys.exit(1)
+    text, _ = result
+    if len(sys.argv) >= 3:
+        with open(sys.argv[2], 'w', encoding='utf-8') as f:
+            f.write(text)
+        print(f"已保存到 {sys.argv[2]}")
+    else:
+        print(text)

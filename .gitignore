@@ -3,7 +3,6 @@ dist/
 __pycache__/
 *.pyc
 venv/
-versions/**/*.exe
 detection_result.txt
 solution.txt
 test.txt

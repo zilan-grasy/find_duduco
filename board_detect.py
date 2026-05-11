@@ -5,6 +5,10 @@ from PIL import Image
 
 # BETA: 全屏截图自动定位棋盘区域，算法仍在优化中
 def detect_board(image):
+    """从全屏截图中自动定位棋盘区域。
+    流程：缩放降采样 → Sobel梯度 → Otsu二值化 → 方向投影 → 滑动窗口找高密度区 → 
+          遍历行列区域组合 → 按面积×方正度打分 → 映射回原图坐标 → 裁剪返回
+    返回 (裁剪后的PIL图像, (x1,y1,x2,y2)屏幕坐标) 或 None"""
     open_cv_image = np.array(image)
     if len(open_cv_image.shape) == 3 and open_cv_image.shape[2] == 4:
         open_cv_image = open_cv_image[:, :, :3]
