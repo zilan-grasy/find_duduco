@@ -223,24 +223,23 @@ def recognize_and_format(image):
         return None
     grid, lines = r
     size = len(grid)
-    text = [f"{size}"]
-    for row in grid:
-        text.append(" ".join(str(c) for c in row))
-    return "\n".join(text), lines
+    return {"size": size, "grid": grid}, lines
 
 
 if __name__ == "__main__":
     import sys
+    import json
     if len(sys.argv) < 2:
         print("用法: python grid_recog.py <图像路径> [输出文件]")
-        print("  将识别结果输出为文本，格式：首行为网格大小，后续每行为空格分隔的颜色编号")
+        print("  将识别结果输出为 JSON，格式：{\"size\": N, \"grid\": [[...], ...]}")
         sys.exit(1)
     img = Image.open(sys.argv[1])
     result = recognize_and_format(img)
     if result is None:
         print("识别失败")
         sys.exit(1)
-    text, _ = result
+    puzzle, _ = result
+    text = json.dumps(puzzle, indent=2, ensure_ascii=False)
     if len(sys.argv) >= 3:
         with open(sys.argv[2], 'w', encoding='utf-8') as f:
             f.write(text)

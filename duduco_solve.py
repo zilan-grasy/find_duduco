@@ -406,17 +406,18 @@ class DuducoPuzzleSolver:
 
 if __name__ == "__main__":
     import sys
+    import json
     if len(sys.argv) < 2:
-        print("用法: python duduco_solve.py <输入文件>")
-        print("  输入文件格式：首行为网格大小，后续每行为空格分隔的颜色编号")
-        print("  示例文件: test1_output.txt")
+        print("用法: python duduco_solve.py <JSON文件>")
+        print("  JSON格式：{\"puzzle\": {\"size\": N, \"grid\": [[...], ...]}}")
+        print("  或直接：{\"size\": N, \"grid\": [[...], ...]}")
+        print("  示例文件: userdata/config.json")
         sys.exit(1)
     with open(sys.argv[1], encoding='utf-8') as f:
-        lines = f.read().strip().split('\n')
-    size = int(lines[0])
-    grid = []
-    for line in lines[1:]:
-        grid.append([int(x) for x in line.split()])
+        data = json.load(f)
+    puzzle = data.get("puzzle", data)
+    size = puzzle["size"]
+    grid = puzzle["grid"]
     colors = set()
     for row in grid:
         colors.update(row)

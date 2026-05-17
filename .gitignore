@@ -3,6 +3,7 @@ dist/
 __pycache__/
 *.pyc
 venv/
+userdata/config.json
 detection_result.txt
 solution.txt
 test.txt

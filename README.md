@@ -27,61 +27,76 @@ python find_duduco.py
 pyinstaller 寻找嘟嘟可.spec
 ```
 
+打包后在 `dist/` 目录得到 `寻找嘟嘟可.exe`。首次运行时会在 exe 同级目录自动创建 `userdata/` 文件夹存放配置文件。
+
+> **注意**：测试图片会随 exe 一起打包，可通过「打开图像」载入。
+
 ## 功能
 
 - **打开图像**：载入本地截图，自动识别颜色矩阵并求解
 - **截图识别**：全屏遮罩 + 鼠标框选棋盘区域 → 识别 → 求解
-- **自动识别(beta)**：一键全屏截图，自动定位棋盘，无需手动框选
-- **点击嘟嘟可**：解题后自动移动鼠标到每个嘟嘟可位置并双击
-- **窗口置顶**：方便对照游戏窗口查看结果
+- **自动识别**：位置校准后一键全屏截图，自动匹配棋盘大小并求解
+- **点击嘟嘟可**：解题后自动移动鼠标到每个嘟嘟可位置并双击（首位置可调双击/三击）
+- **设置**：统一管理校准数据、点击速度（滑动条/手动输入）、截图后自动点击开关
 
 ## 测试
 
 ### 测试图片
 
-文件夹内提供了 3 张测试截图，可直接用「打开图像」载入验证效果：
+文件夹内 `userdata/` 提供了 3 张测试截图，可直接用「打开图像」载入验证效果：
 
-- `test1.png`
-- `test2.png`
-- `test3.png`
+- `userdata/test1.png`
+- `userdata/test2.png`
+- `userdata/test3.png`
 
 ### 独立模块命令行用法
 
-图像识别和求解器可脱离 GUI 独立运行，通过文本文件桥接。
+图像识别和求解器可脱离 GUI 独立运行，通过 JSON 文件桥接。
 
-文本格式参考 `test1_output.txt`（test1.png 的识别结果）：
+puzzle JSON 格式（`grid_recog.py` 输出 / `duduco_solve.py` 输入）：
 
+```json
+{
+  "size": 8,
+  "grid": [[8,8,2,...], [8,1,2,...], ...]
+}
 ```
-8
-8 8 2 2 2 3 3 3
-8 1 2 2 1 1 1 3
-8 1 1 1 1 1 1 3
-...
+
+配置文件 `userdata/config.json`（程序自动生成）：
+
+```json
+{
+  "calibrations": {"8": [100, 200, 500, 600]},
+  "click_timings": {"init_delay": 100, "move_press": 20, "press_release": 10, "click_gap": 30, "duduco_gap": 50},
+  "auto_click_capture": false,
+  "auto_click_auto": false,
+  "first_click_3": true,
+  "puzzle": {"size": 8, "grid": [[8,8,2,...], ...]}
+}
 ```
 
-- **首行**：网格大小 N（N×N 棋盘）
-- **第 2 ~ N+1 行**：每行 N 个空格分隔的整数，表示各格子颜色编号（从 1 开始）
+`duduco_solve.py` 兼容两种格式（含 `puzzle` 字段或裸 puzzle）。
 
 ```bash
-# 图像 → 文本
-python grid_recog.py test1.png output.txt
+# 图像 → JSON
+python grid_recog.py userdata/test1.png output.json
 
-# 文本 → 解法
-python duduco_solve.py test1_output.txt
+# JSON → 解法
+python duduco_solve.py output.json
 ```
 
 ## 项目结构
 
 ```
 find_duduco/
-├── find_duduco.py          # 主程序（GUI 界面，import 子模块完成识别和求解）
-├── duduco_solve.py         # 约束传播求解器（可独立 CLI 运行）
-├── grid_recog.py           # 图像网格识别（可独立 CLI 运行）
-├── board_detect.py         # 全屏自动检测棋盘区域（BETA）
-├── 寻找嘟嘟可.spec         # PyInstaller 打包配置
-├── requirements.txt        # Python 依赖
-├── test1.png / test2.png / test3.png   # 测试截图
-├── test1_output.txt        # 文本格式示例
+├── find_duduco.py              # 主程序（GUI 界面，import 子模块完成识别和求解）
+├── duduco_solve.py             # 约束传播求解器（可独立 CLI 运行）
+├── grid_recog.py               # 图像网格识别（可独立 CLI 运行）
+├── 寻找嘟嘟可.spec             # PyInstaller 打包配置
+├── requirements.txt            # Python 依赖
+├── userdata/                    # 用户数据目录
+│   ├── test1.png / test2.png / test3.png   # 测试截图
+│   └── config.json             # 校准 + 间隔 + 自动设置 + 谜题缓存（程序生成）
 ├── .gitignore
 ├── CHANGELOG.md
 ├── LICENSE
@@ -103,7 +118,7 @@ find_duduco/
 
 ## 图像识别管线
 
-边缘检测(Canny) → 投影峰值提取网格线 → 聚类去重 → 切割格子 → HSV 取主色 → K-means 聚类 → Union-Find 合并近色 → 输出颜色编号矩阵
+Canny 边缘检测 → 投影峰值提取网格线 → 聚类去重 → 切割格子 → HSV 取中心区域主色 → K-means 聚类 → Union-Find 合并近色 → 输出颜色编号矩阵
 
 ## 常见问题
 
