@@ -117,6 +117,7 @@ class MainWindow:
         self.auto_click_capture_var = tk.BooleanVar(value=self._load_settings("auto_click_capture", False))
         self.auto_click_auto_var = tk.BooleanVar(value=self._load_settings("auto_click_auto", False))
         self.first_click_3_var = tk.BooleanVar(value=self._load_settings("first_click_3", True))
+        self._game_mode = self._load_settings("game_mode", "v1")
         self._click_mode = None  # 'capture' 或 'auto'，标记当前识别来源
 
         style = ttk.Style()
@@ -141,6 +142,13 @@ class MainWindow:
 
         self.btn_settings = tk.Button(toolbar, text="设置", command=self._show_settings)
         self.btn_settings.pack(side=tk.LEFT, padx=2)
+
+        self.btn_mode = tk.Button(toolbar, text=self._mode_btn_text(), command=self._toggle_mode)
+        self.btn_mode.pack(side=tk.LEFT, padx=2)
+
+        self.btn_version_info = tk.Button(toolbar, text="?", font=("", 8, "bold"),
+                                          width=2, command=self._show_version_info)
+        self.btn_version_info.pack(side=tk.LEFT, padx=0)
 
         self.btn_topmost = tk.Button(toolbar, text="置顶", command=self.toggle_topmost)
         self.btn_topmost.pack(side=tk.RIGHT, padx=2)
@@ -215,7 +223,7 @@ class MainWindow:
             data[k] = v
 
         lines = ['{']
-        keys = ['calibrations', 'click_timings', 'auto_click_capture', 'auto_click_auto', 'first_click_3', 'puzzle']
+        keys = ['game_mode', 'calibrations', 'click_timings', 'auto_click_capture', 'auto_click_auto', 'first_click_3', 'puzzle']
         present = [k for k in keys if k in data]
         for i, key in enumerate(present):
             comma = ',' if i < len(present) - 1 else ''
@@ -317,7 +325,7 @@ class MainWindow:
             self.root.update_idletasks()
 
             self.grid_text.delete(1.0, tk.END)
-            suffix = f" (回退 {idx+1}/{len(all_results)})" if idx > 0 else ""
+            suffix = f" (尝试 {idx+1}/{len(all_results)})" if idx > 0 else ""
             self.grid_text.insert(tk.END, f"校准匹配: {candidate['size']}×{candidate['size']}{suffix}\n")
             self.root.update()
             
@@ -330,14 +338,14 @@ class MainWindow:
         self.solution_text.insert(tk.END, "所有校准尺寸均未找到解", "gray_text")
 
     def _try_calibrations(self, full_screenshot):
-        """用所有校准位置截图并识别，返回按网格数降序排列的结果列表"""
+        """用所有校准位置截图并识别，返回按网格数升序排列的结果列表（先试小棋盘）"""
         results = []
-        for size in sorted(self.calibrations.keys(), reverse=True):
+        for size in sorted(self.calibrations.keys()):
             bbox = self.calibrations[size]
             grid = self.recognizer.recognize_from_image(full_screenshot.crop(bbox))
             if grid is not None and len(grid) > 0:
                 results.append({'size': size, 'bbox': bbox, 'grid_size': len(grid)})
-        results.sort(key=lambda x: x['grid_size'], reverse=True)
+        results.sort(key=lambda x: x['grid_size'])
         return results
 
     def click_duducos(self):
@@ -366,8 +374,16 @@ class MainWindow:
             time.sleep(t["press_release"] / 1000.0)
             user32.mouse_event(0x0004, 0, 0, 0, 0)
 
-        sorted_solution = sorted(self.solution.items())
-        for i, (color, (row, col)) in enumerate(sorted_solution):
+        # 展平为 (row, col) 位置列表
+        all_positions = []
+        for color in sorted(self.solution):
+            val = self.solution[color]
+            if isinstance(val, list):
+                all_positions.extend(val)
+            else:
+                all_positions.append(val)
+
+        for i, (row, col) in enumerate(all_positions):
             center = self.recognizer.get_cell_center(row, col)
             if center is None:
                 continue
@@ -378,10 +394,38 @@ class MainWindow:
             for _ in range(clicks):
                 do_click(sx, sy)
                 time.sleep(t["click_gap"] / 1000.0)
-            if i < len(sorted_solution) - 1:
+            if i < len(all_positions) - 1:
                 time.sleep(t["duduco_gap"] / 1000.0)
 
         self.root.deiconify()
+
+    def _mode_btn_text(self):
+        return "v1" if self._game_mode == "v1" else "v2"
+
+    def _toggle_mode(self):
+        """在 1代/2代 之间切换"""
+        self._game_mode = "v2" if self._game_mode == "v1" else "v1"
+        self.btn_mode.config(text=self._mode_btn_text())
+        self._save_settings(game_mode=self._game_mode)
+        self.solution = None
+        self.solution_text.delete(1.0, tk.END)
+
+    def _show_version_info(self):
+        """显示版本规则说明弹窗"""
+        msg = (
+            "v1  一代规则\n"
+            "    · 每行 1 个嘟嘟可\n"
+            "    · 每列 1 个嘟嘟可\n"
+            "    · 每种颜色 1 个嘟嘟可\n"
+            "    · 嘟嘟可互不相邻\n"
+            "\n"
+            "v2  二代规则\n"
+            "    · 每行 2 个嘟嘟可\n"
+            "    · 每列 2 个嘟嘟可\n"
+            "    · 每种颜色 2 个嘟嘟可\n"
+            "    · 嘟嘟可互不相邻"
+        )
+        messagebox.showinfo("版本规则说明", msg)
 
     def toggle_topmost(self):
         """切换窗口置顶状态"""
@@ -630,7 +674,7 @@ class MainWindow:
         self._resize_image()
 
     def recognize_and_solve(self):
-        """核心管线：网格识别 → 颜色聚类 → 构建求解器 → 约束传播 → 回溯求解 → 显示结果
+        """核心管线：网格识别 → 颜色聚类 → 求解 → 显示结果
         返回 True 表示找到解"""
         if not self.current_image:
             return False
@@ -673,7 +717,7 @@ class MainWindow:
                 self.solution_text.insert(tk.END, "正在求解...\n")
                 self.root.update()
                 
-                solver = DuducoPuzzleSolver(grid, len(colors))
+                solver = DuducoPuzzleSolver(grid, len(colors), self._game_mode)
                 solutions = solver.solve()
                 
                 self.solution_text.delete(1.0, tk.END)

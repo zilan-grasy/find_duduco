@@ -4,6 +4,7 @@ __pycache__/
 *.pyc
 venv/
 userdata/config.json
+userdata/test2_1_output.json
 detection_result.txt
 solution.txt
 test.txt

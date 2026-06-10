@@ -43,11 +43,10 @@ pyinstaller 寻找嘟嘟可.spec
 
 ### 测试图片
 
-文件夹内 `userdata/` 提供了 3 张测试截图，可直接用「打开图像」载入验证效果：
+`userdata/` 提供了测试截图，可直接用「打开图像」载入验证效果：
 
-- `userdata/test1.png`
-- `userdata/test2.png`
-- `userdata/test3.png`
+- `userdata/test1_1.png` / `test1_2.png` / `test1_3.png`（v1 题目）
+- `userdata/test2_1.png` / `test2_2.png` / `test2_3.png`（v2 题目）
 
 ### 独立模块命令行用法
 
@@ -71,6 +70,7 @@ puzzle JSON 格式（`grid_recog.py` 输出 / `duduco_solve.py` 输入）：
   "auto_click_capture": false,
   "auto_click_auto": false,
   "first_click_3": true,
+  "game_mode": "v1",
   "puzzle": {"size": 8, "grid": [[8,8,2,...], ...]}
 }
 ```
@@ -79,24 +79,26 @@ puzzle JSON 格式（`grid_recog.py` 输出 / `duduco_solve.py` 输入）：
 
 ```bash
 # 图像 → JSON
-python grid_recog.py userdata/test1.png output.json
+python grid_recog.py userdata/test1_1.png output.json
 
-# JSON → 解法
-python duduco_solve.py output.json
+# JSON → 解法（可指定 v1 或 v2）
+python duduco_solve.py output.json v1
+python duduco_solve.py output.json v2
 ```
 
 ## 项目结构
 
 ```
 find_duduco/
-├── find_duduco.py              # 主程序（GUI 界面，import 子模块完成识别和求解）
-├── duduco_solve.py             # 约束传播求解器（可独立 CLI 运行）
+├── find_duduco.py              # 主程序（GUI 界面）
+├── duduco_solve.py             # 统一求解器（v1/v2，可独立 CLI 运行）
 ├── grid_recog.py               # 图像网格识别（可独立 CLI 运行）
 ├── 寻找嘟嘟可.spec             # PyInstaller 打包配置
 ├── requirements.txt            # Python 依赖
 ├── userdata/                    # 用户数据目录
-│   ├── test1.png / test2.png / test3.png   # 测试截图
-│   └── config.json             # 校准 + 间隔 + 自动设置 + 谜题缓存（程序生成）
+│   ├── test1_1.png / test1_2.png / test1_3.png  # v1 测试截图
+│   ├── test2_1.png / test2_2.png / test2_3.png  # v2 测试截图
+│   └── config.json             # 配置 + 谜题缓存（程序生成）
 ├── .gitignore
 ├── CHANGELOG.md
 ├── LICENSE
@@ -105,16 +107,13 @@ find_duduco/
 
 ## 求解算法
 
-采用**约束传播 + 回溯**策略：
+采用 **MRV 回溯 + 前向检查**：
 
-1. **约束传播**（不动点迭代至收敛）：
-   - 规则1 · 最后一格：某行/列只剩 1 个合法位置 → 确定放置
-   - 规则2 · 双向鸽巢原理：N 种颜色横跨 N 行/列 → 双向排除（占位：该 N 行/列上其他色排除；定域：该 N 色在其他行/列也排除）
-   - 规则3 · 包围排除：某格子 8 邻域包含某颜色的全部剩余候选 → 该格排除
+1. **前向检查**：每步之后快速验证每行/列剩余容量 ≥ 仍需数，尽早剪枝
+2. **MRV 回溯**：每次选择合法候选最少的颜色（最小剩余值启发式），为它穷举所有合法位置组合，递归求解
+3. **找到一个解即返回**：v1 每色放 1 格，v2 每色放 2 格（两个嘟嘟可互不相邻）
 
-2. **双色迷你回溯**：约束卡住时穷举候选最少的 2 色，交叉验证提取公共推理
-
-3. **主递归回溯**：剩余颜色逐一尝试合法位置，找第一个完整解
+相比旧版的约束传播规则体系，MRV 回溯更简洁、更可控、无级联风险。
 
 ## 图像识别管线
 

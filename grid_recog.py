@@ -22,8 +22,9 @@ def _cluster_lines(lines, threshold=10):
 
 def _find_grid_lines(edges, height, width):
     """从边缘图中检测网格线：先投影峰值法，不足时回退 Hough 直线检测"""
-    horizontal_projection = np.sum(edges, axis=0)
-    vertical_projection = np.sum(edges, axis=1)
+    # 水平投影(axis=1, 每行边缘数) → 水平网格线; 垂直投影(axis=0, 每列边缘数) → 垂直网格线
+    row_projection = np.sum(edges, axis=1)
+    col_projection = np.sum(edges, axis=0)
 
     def find_peaks(projection, threshold_ratio=0.1):
         threshold = np.max(projection) * threshold_ratio
@@ -40,8 +41,8 @@ def _find_grid_lines(edges, height, width):
             peaks.append((peak_start + len(projection)) // 2)
         return peaks
 
-    h_lines = find_peaks(vertical_projection, 0.15)
-    v_lines = find_peaks(horizontal_projection, 0.15)
+    h_lines = find_peaks(row_projection, 0.15)
+    v_lines = find_peaks(col_projection, 0.15)
 
     if len(h_lines) < 3 or len(v_lines) < 3:
         min_line_length = min(width, height) // 5
@@ -58,17 +59,16 @@ def _find_grid_lines(edges, height, width):
     return h_lines, v_lines
 
 
-def _get_dominant_color(cell, use_center=False):
-    """提取格子主色：转HSV后取均值，白色/低饱和视为空白(返回None)"""
+def _get_dominant_color(cell):
+    """提取格子主色：取中心区域HSV均值，白色/低饱和视为空白(返回None)"""
     if cell.size == 0:
         return None
-    if use_center:
-        h, w = cell.shape[:2]
-        margin_h, margin_w = int(h * 0.2), int(w * 0.2)
-        if margin_h > 0 and margin_w > 0:
-            cell = cell[margin_h:h - margin_h, margin_w:w - margin_w]
-            if cell.size == 0:
-                return None
+    h, w = cell.shape[:2]
+    margin_h, margin_w = int(h * 0.2), int(w * 0.2)
+    if margin_h > 0 and margin_w > 0:
+        cell = cell[margin_h:h - margin_h, margin_w:w - margin_w]
+        if cell.size == 0:
+            return None
     hsv = cv2.cvtColor(cell, cv2.COLOR_BGR2HSV)
     avg_h, avg_s, avg_v = np.mean(hsv[:, :, 0]), np.mean(hsv[:, :, 1]), np.mean(hsv[:, :, 2])
     if avg_s < 10 or (avg_v > 245 and avg_s < 25):
@@ -138,7 +138,7 @@ def recognize_from_image(image):
     for row in cells:
         color_row = []
         for cell in row:
-            color_row.append(_get_dominant_color(cell, use_center=True))
+            color_row.append(_get_dominant_color(cell))
         color_list.append(color_row)
 
     all_colors = [c for row in color_list for c in row if c is not None]
@@ -162,7 +162,7 @@ def recognize_from_image(image):
         _, _, centers = cv2.kmeans(
             normalized.reshape((-1, 3)), target_colors, None, criteria, 30, cv2.KMEANS_PP_CENTERS)
         best_centers = centers
-    except:
+    except Exception:
         return [[1 if c else 0 for c in row] for row in color_list]
 
     # Union-Find 合并距离过近的聚类中心，避免同一颜色被拆成多个编号
